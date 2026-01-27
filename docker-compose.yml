@@ -7,7 +7,7 @@
 
 services:
   copilot-api:
-    image: ghcr.io/ericc-ch/copilot-api:latest
+    image: ghcr.io/yuegongzi/copilot-api:latest
     container_name: copilot-api
     ports:
       - "4141:4141"

@@ -1,5 +1,12 @@
 # Copilot API Proxy
 
+**English | [中文](README.zh-CN.md)**
+
+> [!NOTE]
+> **About This Fork**
+> This project is forked from [ericc-ch/copilot-api](https://github.com/ericc-ch/copilot-api). Since the original author has discontinued maintenance and no longer supports the new API, we have redesigned and rewritten it.
+> Special thanks to [@ericc-ch](https://github.com/ericc-ch) for the original work and contribution!
+
 > [!WARNING]
 > This is a reverse-engineered proxy of GitHub Copilot API. It is not supported by GitHub, and may break unexpectedly. Use at your own risk.
 
@@ -17,8 +24,6 @@
 >
 > Use this proxy responsibly to avoid account restrictions.
 
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/E1E519XS7W)
-
 ---
 
 **Note:** If you are using [opencode](https://github.com/sst/opencode), you do not need this project. Opencode supports GitHub Copilot provider out of the box.
@@ -27,7 +32,96 @@
 
 ## Project Overview
 
-A reverse-engineered proxy for the GitHub Copilot API that exposes it as an OpenAI and Anthropic compatible service. This allows you to use GitHub Copilot with any tool that supports the OpenAI Chat Completions API or the Anthropic Messages API, including to power [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview).
+A reverse-engineered proxy for the GitHub Copilot API that exposes it as an OpenAI and Anthropic compatible service. This allows you to use GitHub Copilot with any tool that supports the OpenAI Chat Completions API or the Anthropic Messages API, including [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview).
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Clients["Client Applications"]
+        CC[Claude Code]
+        OC[OpenCode]
+        OTHER[Other OpenAI/Anthropic Compatible Tools]
+    end
+
+    subgraph Proxy["Copilot API Proxy (Docker)"]
+        direction TB
+        SERVER[Hono Server :4141]
+        
+        subgraph Routes["API Routes"]
+            ANTHROPIC["/v1/messages<br/>Anthropic API"]
+            OPENAI["/v1/chat/completions<br/>OpenAI API"]
+            RESPONSES["/v1/responses<br/>OpenAI Responses API"]
+            MODELS["/v1/models"]
+            EMBED["/v1/embeddings"]
+        end
+        
+        subgraph Admin["Management"]
+            ADMIN_UI["/admin<br/>Web UI"]
+            USAGE["/usage"]
+            TOKEN_EP["/token"]
+        end
+        
+        subgraph Core["Core Components"]
+            TRANSLATOR[Request Translator]
+            STATE[State Manager]
+            ACCOUNTS[Account Manager]
+            RATE[Rate Limiter]
+        end
+        
+        subgraph Storage["Persistent Storage"]
+            CONFIG[("/data/copilot-api/config.json")]
+        end
+    end
+
+    subgraph GitHub["GitHub Services"]
+        GH_OAUTH[GitHub OAuth<br/>Device Flow]
+        GH_COPILOT[GitHub Copilot API]
+    end
+
+    CC --> |Anthropic Protocol| ANTHROPIC
+    OC --> |OpenAI Protocol| OPENAI
+    OTHER --> |OpenAI/Anthropic| Routes
+
+    ANTHROPIC --> TRANSLATOR
+    OPENAI --> TRANSLATOR
+    RESPONSES --> TRANSLATOR
+    
+    TRANSLATOR --> RATE
+    RATE --> STATE
+    STATE --> GH_COPILOT
+    
+    ADMIN_UI --> ACCOUNTS
+    ACCOUNTS --> GH_OAUTH
+    ACCOUNTS --> CONFIG
+    STATE --> CONFIG
+
+    GH_COPILOT --> |Response| TRANSLATOR
+    TRANSLATOR --> |Translated Response| Clients
+```
+
+## Request Flow
+
+```mermaid
+sequenceDiagram
+    participant Client as Claude Code / Client
+    participant Proxy as Copilot API Proxy
+    participant GitHub as GitHub Copilot API
+
+    Note over Client,GitHub: Initial Setup (via /admin)
+    Proxy->>GitHub: OAuth Device Flow
+    GitHub-->>Proxy: Access Token
+    Proxy->>Proxy: Store in config.json
+
+    Note over Client,GitHub: API Request Flow
+    Client->>Proxy: POST /v1/messages (Anthropic format)
+    Proxy->>Proxy: Translate to Copilot format
+    Proxy->>Proxy: Check rate limit
+    Proxy->>GitHub: Forward request
+    GitHub-->>Proxy: Copilot response
+    Proxy->>Proxy: Translate to Anthropic format
+    Proxy-->>Client: Anthropic-compatible response
+```
 
 ## Features
 
@@ -35,7 +129,7 @@ A reverse-engineered proxy for the GitHub Copilot API that exposes it as an Open
 - **Web-based Account Management**: Add and manage multiple GitHub accounts through a simple web interface at `/admin`.
 - **Multi-Account Support**: Switch between different GitHub accounts without restarting the server.
 - **Docker-First Deployment**: Optimized for containerized deployment with persistent data storage.
-- **Usage Dashboard**: A web-based dashboard to monitor your Copilot API usage, view quotas, and see detailed statistics.
+- **Usage Monitoring**: View your Copilot API usage and quota information via `/usage` endpoint.
 - **Rate Limit Control**: Manage API usage with rate-limiting options to prevent errors from rapid requests.
 - **Support for Different Account Types**: Works with individual, business, and enterprise GitHub Copilot plans.
 
@@ -45,7 +139,7 @@ A reverse-engineered proxy for the GitHub Copilot API that exposes it as an Open
 
 ```bash
 # Clone the repository
-git clone https://github.com/ericc-ch/copilot-api.git
+git clone https://github.com/yuegongzi/copilot-api.git
 cd copilot-api
 
 # Start the server
@@ -65,7 +159,7 @@ docker run -d \
   -p 4141:4141 \
   -v copilot-data:/data \
   --restart unless-stopped \
-  ghcr.io/ericc-ch/copilot-api:latest
+  ghcr.io/yuegongzi/copilot-api:latest
 ```
 
 ## Account Setup
@@ -77,6 +171,7 @@ docker run -d \
 5. Your account will be automatically configured once authorized
 
 The admin panel allows you to:
+
 - Add multiple GitHub accounts
 - Switch between accounts
 - Remove accounts
@@ -98,7 +193,7 @@ The admin panel allows you to:
 ```yaml
 services:
   copilot-api:
-    image: ghcr.io/ericc-ch/copilot-api:latest
+    image: ghcr.io/yuegongzi/copilot-api:latest
     container_name: copilot-api
     ports:
       - "4141:4141"
@@ -133,13 +228,13 @@ volumes:
 | `/v1/messages` | `POST` | Anthropic Messages API |
 | `/v1/messages/count_tokens` | `POST` | Token counting |
 
-### Monitoring Endpoints
+### Management Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/admin` | `GET` | Account management Web UI (localhost only) |
 | `/usage` | `GET` | Copilot usage statistics and quota |
 | `/token` | `GET` | Current Copilot token |
-| `/admin` | `GET` | Account management UI (localhost only) |
 
 ## Using with Claude Code
 
@@ -149,12 +244,13 @@ Configure Claude Code to use this proxy by creating a `.claude/settings.json` fi
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:4141",
-    "ANTHROPIC_AUTH_TOKEN": "dummy",
-    "ANTHROPIC_MODEL": "gpt-4.1",
-    "ANTHROPIC_SMALL_FAST_MODEL": "gpt-4.1-mini",
-    "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+    "ANTHROPIC_AUTH_TOKEN": "sk-xxxx",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4.5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4.5",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4.5",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-4.5"
   },
+  "model": "opus",
   "permissions": {
     "deny": ["WebSearch"]
   }

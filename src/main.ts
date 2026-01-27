@@ -67,9 +67,7 @@ async function main(): Promise<void> {
 
   const serverUrl = `http://localhost:${PORT}`
 
-  consola.box(
-    `copilot-api server\n\n📋 Account Manager: ${serverUrl}/admin\n🌐 Usage Viewer: https://ericc-ch.github.io/copilot-api?endpoint=${serverUrl}/usage`,
-  )
+  consola.box(`copilot-api server\n\n📋 Account Manager: ${serverUrl}/admin`)
 
   const { server } = await import("./server")
 
