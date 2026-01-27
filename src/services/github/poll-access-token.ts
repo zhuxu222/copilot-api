@@ -88,7 +88,9 @@ export async function pollAccessTokenOnce(
       return { status: "pending" }
     }
     if (json.error === "slow_down") {
-      return { status: "slow_down" }
+      // GitHub returns a new interval when slow_down occurs, use it or default to 10 seconds
+      const newInterval = (json as { interval?: number }).interval ?? 10
+      return { status: "slow_down", interval: newInterval }
     }
     if (json.error === "expired_token") {
       return { status: "expired" }
@@ -117,7 +119,7 @@ export async function pollAccessTokenOnce(
 export type PollResult =
   | { status: "success"; token: string }
   | { status: "pending" }
-  | { status: "slow_down" }
+  | { status: "slow_down"; interval: number }
   | { status: "expired" }
   | { status: "denied" }
   | { status: "error"; error: string }

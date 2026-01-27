@@ -2,7 +2,10 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-const APP_DIR = path.join(os.homedir(), ".local", "share", "copilot-api")
+// Use XDG_DATA_HOME if set (for Docker), otherwise use ~/.local/share
+const dataHome =
+  process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share")
+const APP_DIR = path.join(dataHome, "copilot-api")
 
 const GITHUB_TOKEN_PATH = path.join(APP_DIR, "github_token")
 const CONFIG_PATH = path.join(APP_DIR, "config.json")

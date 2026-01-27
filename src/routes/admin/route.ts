@@ -249,8 +249,17 @@ adminRoutes.post("/api/auth/poll", async (c) => {
 
   const result = await pollAccessTokenOnce(body.deviceCode)
 
-  if (result.status === "pending" || result.status === "slow_down") {
+  if (result.status === "pending") {
     return c.json({ pending: true, message: "Waiting for user authorization" })
+  }
+
+  if (result.status === "slow_down") {
+    return c.json({
+      pending: true,
+      slowDown: true,
+      interval: result.interval,
+      message: "Rate limited, please slow down",
+    })
   }
 
   if (result.status === "expired") {
