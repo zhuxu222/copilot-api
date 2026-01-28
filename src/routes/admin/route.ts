@@ -8,8 +8,8 @@ import {
   setActiveAccount,
   type Account,
 } from "~/lib/accounts"
+import { copilotTokenManager } from "~/lib/copilot-token-manager"
 import { state } from "~/lib/state"
-import { getCopilotToken } from "~/services/github/get-copilot-token"
 import { getDeviceCode } from "~/services/github/get-device-code"
 import { getGitHubUser } from "~/services/github/get-user"
 import { pollAccessTokenOnce } from "~/services/github/poll-access-token"
@@ -85,8 +85,8 @@ adminRoutes.post("/api/accounts/:id/activate", async (c) => {
 
   // Refresh Copilot token with new account
   try {
-    const { token } = await getCopilotToken()
-    state.copilotToken = token
+    copilotTokenManager.clear()
+    await copilotTokenManager.getToken()
   } catch {
     return c.json(
       {
@@ -136,14 +136,14 @@ adminRoutes.delete("/api/accounts/:id", async (c) => {
 
     // Refresh Copilot token
     try {
-      const { token } = await getCopilotToken()
-      state.copilotToken = token
+      copilotTokenManager.clear()
+      await copilotTokenManager.getToken()
     } catch {
       // Ignore refresh errors on delete
     }
   } else {
     state.githubToken = undefined
-    state.copilotToken = undefined
+    copilotTokenManager.clear()
   }
 
   return c.json({ success: true })
@@ -223,8 +223,8 @@ async function createAccountFromToken(
   state.accountType = account.accountType
 
   try {
-    const { token: copilotToken } = await getCopilotToken()
-    state.copilotToken = copilotToken
+    copilotTokenManager.clear()
+    await copilotTokenManager.getToken()
   } catch {
     // Continue even if Copilot token fails
   }
@@ -315,7 +315,8 @@ adminRoutes.get("/api/auth/status", async (c) => {
   const activeAccount = await getActiveAccount()
 
   return c.json({
-    authenticated: Boolean(state.githubToken) && Boolean(state.copilotToken),
+    authenticated:
+      Boolean(state.githubToken) && copilotTokenManager.hasValidToken(),
     hasAccounts: Boolean(activeAccount),
     activeAccount:
       activeAccount ?

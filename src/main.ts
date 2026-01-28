@@ -5,10 +5,10 @@ import { serve, type ServerHandler } from "srvx"
 
 import { getActiveAccount } from "./lib/accounts"
 import { mergeConfigWithDefaults } from "./lib/config"
+import { copilotTokenManager } from "./lib/copilot-token-manager"
 import { ensurePaths } from "./lib/paths"
 import { initProxyFromEnv } from "./lib/proxy"
 import { state } from "./lib/state"
-import { setupCopilotToken } from "./lib/token"
 import { cacheModels, cacheVSCodeVersion } from "./lib/utils"
 
 // Configuration from environment variables
@@ -55,7 +55,7 @@ async function main(): Promise<void> {
       consola.info("GitHub token:", activeAccount.token)
     }
 
-    await setupCopilotToken()
+    await copilotTokenManager.getToken()
     await cacheModels()
 
     consola.info(
