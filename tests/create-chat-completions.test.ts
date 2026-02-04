@@ -2,6 +2,7 @@ import { test, expect, mock } from "bun:test"
 
 import type { ChatCompletionsPayload } from "../src/services/copilot/create-chat-completions"
 
+import { copilotTokenManager } from "../src/lib/copilot-token-manager"
 import { state } from "../src/lib/state"
 import { createChatCompletions } from "../src/services/copilot/create-chat-completions"
 
@@ -9,6 +10,11 @@ import { createChatCompletions } from "../src/services/copilot/create-chat-compl
 state.copilotToken = "test-token"
 state.vsCodeVersion = "1.0.0"
 state.accountType = "individual"
+
+const tokenManager = copilotTokenManager as unknown as {
+  tokenExpiresAt: number
+}
+tokenManager.tokenExpiresAt = Math.floor(Date.now() / 1000) + 3600
 
 // Helper to mock fetch
 const fetchMock = mock(
