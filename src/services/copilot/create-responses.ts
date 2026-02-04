@@ -4,6 +4,7 @@ import { events } from "fetch-event-stream"
 import { copilotBaseUrl, copilotHeaders } from "~/lib/api-config"
 import { HTTPError } from "~/lib/error"
 import { state } from "~/lib/state"
+import { fetchCopilotWithRetry } from "~/services/copilot/request"
 
 export interface ResponsesPayload {
   model: string
@@ -330,20 +331,21 @@ export const createResponses = async (
   payload: ResponsesPayload,
   { vision, initiator }: ResponsesRequestOptions,
 ): Promise<CreateResponsesReturn> => {
-  if (!state.copilotToken) throw new Error("Copilot token not found")
-
-  const headers: Record<string, string> = {
+  const buildHeaders = () => ({
     ...copilotHeaders(state, vision),
     "X-Initiator": initiator,
-  }
+  })
 
   // service_tier is not supported by github copilot
   payload.service_tier = null
 
-  const response = await fetch(`${copilotBaseUrl(state)}/responses`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
+  const response = await fetchCopilotWithRetry({
+    url: `${copilotBaseUrl(state)}/responses`,
+    init: {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    buildHeaders,
   })
 
   if (!response.ok) {

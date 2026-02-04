@@ -164,5 +164,19 @@ export function getReasoningEffortForModel(
   model: string,
 ): "none" | "minimal" | "low" | "medium" | "high" | "xhigh" {
   const config = getConfig()
-  return config.modelReasoningEfforts?.[model] ?? "high"
+  const configuredEffort = config.modelReasoningEfforts?.[model]
+
+  if (configuredEffort) {
+    return configuredEffort
+  }
+
+  if (model.startsWith("gpt-5.2")) {
+    return "xhigh"
+  }
+
+  if (model.startsWith("gpt-5.1")) {
+    return "xhigh"
+  }
+
+  return "high"
 }

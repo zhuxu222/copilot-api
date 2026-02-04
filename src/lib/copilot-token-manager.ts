@@ -10,6 +10,7 @@ import { state } from "./state"
  */
 class CopilotTokenManager {
   private refreshTimer: ReturnType<typeof setTimeout> | null = null
+  private refreshPromise: Promise<void> | null = null
   private tokenExpiresAt: number = 0
 
   /**
@@ -20,7 +21,13 @@ class CopilotTokenManager {
     // If no token or token is expired/expiring soon (within 60 seconds), refresh
     const now = Date.now() / 1000
     if (!state.copilotToken || this.tokenExpiresAt - now < 60) {
-      await this.refreshToken()
+      if (!this.refreshPromise) {
+        this.refreshPromise = this.refreshToken().finally(() => {
+          this.refreshPromise = null
+        })
+      }
+
+      await this.refreshPromise
     }
 
     if (!state.copilotToken) {
@@ -95,6 +102,7 @@ class CopilotTokenManager {
       clearTimeout(this.refreshTimer)
       this.refreshTimer = null
     }
+    this.refreshPromise = null
     state.copilotToken = undefined
     this.tokenExpiresAt = 0
     consola.debug("[CopilotTokenManager] Token cleared")

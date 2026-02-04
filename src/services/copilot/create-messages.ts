@@ -9,6 +9,7 @@ import type {
 import { copilotBaseUrl, copilotHeaders } from "~/lib/api-config"
 import { HTTPError } from "~/lib/error"
 import { state } from "~/lib/state"
+import { fetchCopilotWithRetry } from "~/services/copilot/request"
 
 export type MessagesStream = ReturnType<typeof events>
 export type CreateMessagesReturn = AnthropicResponse | MessagesStream
@@ -17,8 +18,6 @@ export const createMessages = async (
   payload: AnthropicMessagesPayload,
   anthropicBetaHeader?: string,
 ): Promise<CreateMessagesReturn> => {
-  if (!state.copilotToken) throw new Error("Copilot token not found")
-
   const enableVision = payload.messages.some(
     (message) =>
       Array.isArray(message.content)
@@ -34,21 +33,28 @@ export const createMessages = async (
       : true
   }
 
-  const headers: Record<string, string> = {
-    ...copilotHeaders(state, enableVision),
-    "X-Initiator": isInitiateRequest ? "user" : "agent",
+  const buildHeaders = () => {
+    const headers: Record<string, string> = {
+      ...copilotHeaders(state, enableVision),
+      "X-Initiator": isInitiateRequest ? "user" : "agent",
+    }
+
+    if (anthropicBetaHeader) {
+      headers["anthropic-beta"] = anthropicBetaHeader
+    } else if (payload.thinking?.budget_tokens) {
+      headers["anthropic-beta"] = "interleaved-thinking-2025-05-14"
+    }
+
+    return headers
   }
 
-  if (anthropicBetaHeader) {
-    headers["anthropic-beta"] = anthropicBetaHeader
-  } else if (payload.thinking?.budget_tokens) {
-    headers["anthropic-beta"] = "interleaved-thinking-2025-05-14"
-  }
-
-  const response = await fetch(`${copilotBaseUrl(state)}/v1/messages`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
+  const response = await fetchCopilotWithRetry({
+    url: `${copilotBaseUrl(state)}/v1/messages`,
+    init: {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    buildHeaders,
   })
 
   if (!response.ok) {

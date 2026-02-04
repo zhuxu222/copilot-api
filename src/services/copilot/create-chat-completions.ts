@@ -4,12 +4,11 @@ import { events } from "fetch-event-stream"
 import { copilotHeaders, copilotBaseUrl } from "~/lib/api-config"
 import { HTTPError } from "~/lib/error"
 import { state } from "~/lib/state"
+import { fetchCopilotWithRetry } from "~/services/copilot/request"
 
 export const createChatCompletions = async (
   payload: ChatCompletionsPayload,
 ) => {
-  if (!state.copilotToken) throw new Error("Copilot token not found")
-
   const enableVision = payload.messages.some(
     (x) =>
       typeof x.content !== "string"
@@ -28,15 +27,18 @@ export const createChatCompletions = async (
   }
 
   // Build headers and add X-Initiator
-  const headers: Record<string, string> = {
+  const buildHeaders = () => ({
     ...copilotHeaders(state, enableVision),
     "X-Initiator": isAgentCall ? "agent" : "user",
-  }
+  })
 
-  const response = await fetch(`${copilotBaseUrl(state)}/chat/completions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
+  const response = await fetchCopilotWithRetry({
+    url: `${copilotBaseUrl(state)}/chat/completions`,
+    init: {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    buildHeaders,
   })
 
   if (!response.ok) {
