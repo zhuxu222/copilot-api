@@ -1,5 +1,6 @@
 import type { Context } from "hono"
 
+import consola from "consola"
 import { streamSSE, type SSEMessage } from "hono/streaming"
 
 import { createHandlerLogger } from "~/lib/logger"
@@ -19,6 +20,7 @@ export async function handleCompletion(c: Context) {
   await checkRateLimit(state)
 
   let payload = await c.req.json<ChatCompletionsPayload>()
+  consola.info(`[Request] model: ${payload.model}`)
   logger.debug("Request payload:", JSON.stringify(payload).slice(-400))
 
   // Find the selected model
