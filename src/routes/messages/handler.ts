@@ -320,7 +320,7 @@ const formatToolResultContent = (block: AnthropicToolResultBlock): string => {
     .join("\n")
 }
 
-const sanitizeOrphanToolResults = (
+export const sanitizeOrphanToolResults = (
   anthropicPayload: AnthropicMessagesPayload,
 ): void => {
   for (const [index, msg] of anthropicPayload.messages.entries()) {
