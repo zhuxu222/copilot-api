@@ -66,6 +66,7 @@ export async function handleCompletion(c: Context) {
   // e.g. {"role":"user","content":[{"type":"tool_result","content":"Launching skill: xxx"},{"type":"text","text":"xxx"}]}
   // not only for claude, but also for opencode
   mergeToolResultForClaude(anthropicPayload)
+  sanitizeOrphanToolResults(anthropicPayload)
 
   if (shouldUseMessagesApi(anthropicPayload.model)) {
     return await handleWithMessagesApi(c, anthropicPayload, anthropicBeta)
@@ -305,6 +306,65 @@ const mergeContentWithTexts = (
     return { ...tr, content: `${tr.content}\n\n${appendedTexts}` }
   }
   return { ...tr, content: [...tr.content, ...textBlocks] }
+}
+
+const formatToolResultContent = (block: AnthropicToolResultBlock): string => {
+  if (typeof block.content === "string") {
+    return block.content
+  }
+
+  return block.content
+    .map((item) =>
+      item.type === "text" ? item.text : `[image:${item.source.media_type}]`,
+    )
+    .join("\n")
+}
+
+const sanitizeOrphanToolResults = (
+  anthropicPayload: AnthropicMessagesPayload,
+): void => {
+  for (const [index, msg] of anthropicPayload.messages.entries()) {
+    if (msg.role !== "user" || !Array.isArray(msg.content)) continue
+
+    const previousMessage =
+      index > 0 ? anthropicPayload.messages[index - 1] : undefined
+    const toolUseIds = new Set<string>()
+
+    if (
+      previousMessage
+      && previousMessage.role === "assistant"
+      && Array.isArray(previousMessage.content)
+    ) {
+      for (const block of previousMessage.content) {
+        if (block.type === "tool_use") {
+          toolUseIds.add(block.id)
+        }
+      }
+    }
+
+    msg.content = msg.content.map((block) => {
+      if (block.type !== "tool_result") {
+        return block
+      }
+
+      if (toolUseIds.has(block.tool_use_id)) {
+        return block
+      }
+
+      logger.warn(
+        `Orphan tool_result converted to text at message index ${index}, tool_use_id=${block.tool_use_id}`,
+      )
+
+      const contentText = formatToolResultContent(block)
+      return {
+        type: "text",
+        text:
+          contentText.length > 0 ?
+            contentText
+          : "[tool_result without corresponding tool_use was removed]",
+      }
+    })
+  }
 }
 
 const mergeToolResultForClaude = (
