@@ -19,7 +19,8 @@ set PORT=4141
 set LOCAL_ACCESS_MODE=container-bridge
 
 :: 企业代理 (仅 Phase 3 启动服务时使用，安装依赖时不设)
-set UPSTREAM_PROXY=https://copilot-proxy.lenovo.com:8000
+@REM set UPSTREAM_PROXY=https://copilot-proxy.lenovo.com:8000
+set UPSTREAM_PROXY=http://10.62.216.80:8000
 
 :: Bun CA 证书 (信任企业代理的自签名 TLS 证书)
 set CA_CERT_FILE=%~dp0copilotproxy-ca.pem
