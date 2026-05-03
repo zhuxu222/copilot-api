@@ -136,13 +136,30 @@ function parseUrlOrigin(value: string | undefined): string | undefined {
   }
 }
 
+function isPrivateHostHeader(hostHeader: string | undefined): boolean {
+  const normalized = normalizeAddress(hostHeader)
+
+  if (!normalized) {
+    return false
+  }
+
+  return isPrivatePeerAddress(stripPort(normalized))
+}
+
 function getExpectedRequestOrigin(
   requestUrl: string,
   hostHeader: string | undefined,
 ): string | undefined {
   const normalizedHost = normalizeAddress(hostHeader)
 
-  if (!normalizedHost || !isLocalHostHeader(normalizedHost)) {
+  if (!normalizedHost) {
+    return undefined
+  }
+
+  if (
+    !isLocalHostHeader(normalizedHost)
+    && !isPrivateHostHeader(normalizedHost)
+  ) {
     return undefined
   }
 
