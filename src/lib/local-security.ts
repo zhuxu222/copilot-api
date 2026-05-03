@@ -285,7 +285,6 @@ export function isTrustedLocalPeer(
   return (
     process.env.LOCAL_ACCESS_MODE === LOCAL_ACCESS_MODE.CONTAINER_BRIDGE
     && isPrivatePeerAddress(peerAddress)
-    && isLocalHostHeader(hostHeader)
   )
 }
 
