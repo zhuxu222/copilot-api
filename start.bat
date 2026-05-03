@@ -53,15 +53,11 @@ echo.
 echo [Step 2] Installing dependencies (direct internet, no proxy)...
 cd /d "%~dp0"
 
-if not exist "node_modules" (
-    call "%BUN_PATH%" install
-    if %ERRORLEVEL% neq 0 (
-        echo [X] Failed to install dependencies.
-        pause
-        exit /b 1
-    )
-) else (
-    echo [*] node_modules found, skipping install.
+call "%BUN_PATH%" install
+if %ERRORLEVEL% neq 0 (
+    echo [X] Failed to install dependencies.
+    pause
+    exit /b 1
 )
 echo.
 
