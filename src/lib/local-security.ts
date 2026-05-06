@@ -293,7 +293,7 @@ export function isPrivatePeerAddress(address: string | undefined): boolean {
 
 export function isTrustedLocalPeer(
   peerAddress: string | undefined,
-  hostHeader: string | undefined,
+  _hostHeader: string | undefined,
 ): boolean {
   if (isLoopbackPeerAddress(peerAddress)) {
     return true

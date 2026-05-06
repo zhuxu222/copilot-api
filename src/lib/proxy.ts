@@ -1,6 +1,6 @@
 import consola from "consola"
 import { getProxyForUrl } from "proxy-from-env"
-import { Agent, ProxyAgent, type Dispatcher } from "undici"
+import { Agent, ProxyAgent, setGlobalDispatcher, type Dispatcher } from "undici"
 
 const proxyAgentCache = new Map<string, ProxyAgent>()
 const directAgent = new Agent()
@@ -123,7 +123,10 @@ export function initProxyFromEnv(): void {
           }
           return (agent as unknown as Dispatcher).dispatch(options, handler)
         } catch {
-          return (directAgent as unknown as Dispatcher).dispatch(options, handler)
+          return (directAgent as unknown as Dispatcher).dispatch(
+            options,
+            handler,
+          )
         }
       },
       close() {
@@ -134,9 +137,7 @@ export function initProxyFromEnv(): void {
       },
     }
 
-    ;(globalThis as Record<string, unknown>).setGlobalDispatcher?.(
-      dispatcher as Dispatcher,
-    )
+    setGlobalDispatcher(dispatcher as Dispatcher)
     consola.debug("HTTP proxy configured from environment (per-URL)")
   } catch (err) {
     consola.debug("Proxy setup skipped:", err)

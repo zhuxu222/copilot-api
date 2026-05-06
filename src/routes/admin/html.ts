@@ -375,7 +375,7 @@ export const adminHtml = `<!DOCTYPE html>
             renderCardEmptyState('modelsList', getModelsUnavailableMessage());
             return;
           }
-          const res = await fetch('/v1/models');
+          const res = await fetch(API_BASE + '/models');
           if (!res.ok) throw new Error('Failed to load models');
           const data = await res.json();
           renderModels(data);
@@ -404,7 +404,7 @@ export const adminHtml = `<!DOCTYPE html>
             renderCardEmptyState('usageContent', getUsageUnavailableMessage());
             return;
           }
-          const res = await fetch('/usage');
+          const res = await fetch(API_BASE + '/usage');
           if (!res.ok) throw new Error('Failed to load usage');
           const data = await res.json();
           renderUsage(data);
@@ -562,7 +562,7 @@ export const adminHtml = `<!DOCTYPE html>
             input.placeholder = getModelSuggestionPlaceholder();
             return;
           }
-          const res = await fetch('/v1/models');
+          const res = await fetch(API_BASE + '/models');
           if (!res.ok) throw new Error('Failed to load model suggestions');
           const data = await res.json();
           input.placeholder = 'Target model';

@@ -1,4 +1,4 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 
 import {
   addAccount,
@@ -10,7 +10,10 @@ import {
 } from "~/lib/accounts"
 import { getConfig, saveConfig } from "~/lib/config"
 import { copilotTokenManager } from "~/lib/copilot-token-manager"
+import { forwardError } from "~/lib/error"
 import { state } from "~/lib/state"
+import { cacheModels } from "~/lib/utils"
+import { getCopilotUsage } from "~/services/github/get-copilot-usage"
 import { getDeviceCode } from "~/services/github/get-device-code"
 import { getGitHubUser } from "~/services/github/get-user"
 import { pollAccessTokenOnce } from "~/services/github/poll-access-token"
@@ -69,10 +72,9 @@ adminRoutes.put("/api/accounts/:id", async (c) => {
   const accountId = c.req.param("id")
   const config = getConfig()
 
-  const accountIndex = (config.accounts ?? []).findIndex(
-    (a) => a.id === accountId,
-  )
-  if (accountIndex === -1) {
+  const accounts = config.accounts ?? []
+  const accountIndex = accounts.findIndex((a) => a.id === accountId)
+  if (accountIndex === -1 || accountIndex >= accounts.length) {
     return c.json(
       { error: { message: "Account not found", type: "not_found" } },
       404,
@@ -80,10 +82,11 @@ adminRoutes.put("/api/accounts/:id", async (c) => {
   }
 
   const body = await c.req.json<{ proxy?: string | null }>()
+  const account = accounts[accountIndex]
 
   if (body.proxy !== undefined) {
     const newProxy = body.proxy?.trim() || undefined
-    config.accounts![accountIndex].proxy = newProxy
+    account.proxy = newProxy
 
     if (config.activeAccountId === accountId) {
       state.proxy = newProxy
@@ -95,9 +98,9 @@ adminRoutes.put("/api/accounts/:id", async (c) => {
   return c.json({
     success: true,
     account: {
-      id: config.accounts![accountIndex].id,
-      login: config.accounts![accountIndex].login,
-      proxy: config.accounts![accountIndex].proxy ?? null,
+      id: account.id,
+      login: account.login,
+      proxy: account.proxy ?? null,
     },
   })
 })
@@ -370,6 +373,41 @@ adminRoutes.get("/api/auth/status", async (c) => {
         }
       : null,
   })
+})
+
+adminRoutes.get("/api/models", async (c: Context) => {
+  try {
+    if (!state.models) {
+      await cacheModels()
+    }
+
+    const models = state.models?.data.map((model) => ({
+      id: model.id,
+      object: "model",
+      type: "model",
+      created: 0,
+      created_at: new Date(0).toISOString(),
+      owned_by: model.vendor,
+      display_name: model.name,
+    }))
+
+    return c.json({
+      object: "list",
+      data: models,
+      has_more: false,
+    })
+  } catch (error) {
+    return await forwardError(c, error)
+  }
+})
+
+adminRoutes.get("/api/usage", async (c: Context) => {
+  try {
+    const usage = await getCopilotUsage()
+    return c.json(usage)
+  } catch (error) {
+    return await forwardError(c, error)
+  }
 })
 
 // Model Mapping API

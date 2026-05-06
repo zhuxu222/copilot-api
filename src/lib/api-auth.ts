@@ -9,11 +9,15 @@ import { timingSafeEqual } from "node:crypto"
  * must include "Authorization: Bearer <API_KEY>". When API_KEY is empty or not
  * set, authentication is skipped (compatible with existing setups).
  */
-export function apiKeyMiddleware(c: Context, next: Next): Promise<Response | undefined> | Response | undefined {
+export async function apiKeyMiddleware(
+  c: Context,
+  next: Next,
+): Promise<Response | undefined> {
   const requiredKey = process.env.API_KEY?.trim()
 
   if (!requiredKey) {
-    return next()
+    await next()
+    return undefined
   }
 
   const authorization = c.req.header("authorization")
@@ -90,5 +94,6 @@ export function apiKeyMiddleware(c: Context, next: Next): Promise<Response | und
     )
   }
 
-  return next()
+  await next()
+  return undefined
 }

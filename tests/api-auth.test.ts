@@ -45,7 +45,7 @@ describe("apiKeyMiddleware", () => {
 
     const res = await createApp().request("/v1/test")
     expect(res.status).toBe(401)
-    const body = await res.json()
+    const body = (await res.json()) as { error: { type: string } }
     expect(body.error.type).toBe("unauthorized")
   })
 
