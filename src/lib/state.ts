@@ -5,6 +5,8 @@ export interface State {
   copilotToken?: string
 
   accountType: string
+  /** HTTP(S) proxy URL for the active account, e.g. "http://10.62.216.80:8000" */
+  proxy?: string
   models?: ModelsResponse
   vsCodeVersion?: string
 

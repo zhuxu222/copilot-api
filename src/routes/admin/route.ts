@@ -27,13 +27,14 @@ adminRoutes.use("*", localOnlyMiddleware)
 adminRoutes.get("/api/accounts", async (c) => {
   const data = await getAccounts()
 
-  // Return accounts without tokens for security
+  // Return accounts without tokens for security (proxy is safe to expose)
   const safeAccounts = data.accounts.map((account) => ({
     id: account.id,
     login: account.login,
     avatarUrl: account.avatarUrl,
     accountType: account.accountType,
     createdAt: account.createdAt,
+    proxy: account.proxy ?? null,
     isActive: account.id === data.activeAccountId,
   }))
 
@@ -58,6 +59,45 @@ adminRoutes.get("/api/accounts/active", async (c) => {
       avatarUrl: account.avatarUrl,
       accountType: account.accountType,
       createdAt: account.createdAt,
+      proxy: account.proxy ?? null,
+    },
+  })
+})
+
+// Update an account (proxy or other non-sensitive fields)
+adminRoutes.put("/api/accounts/:id", async (c) => {
+  const accountId = c.req.param("id")
+  const config = getConfig()
+
+  const accountIndex = (config.accounts ?? []).findIndex(
+    (a) => a.id === accountId,
+  )
+  if (accountIndex === -1) {
+    return c.json(
+      { error: { message: "Account not found", type: "not_found" } },
+      404,
+    )
+  }
+
+  const body = await c.req.json<{ proxy?: string | null }>()
+
+  if (body.proxy !== undefined) {
+    const newProxy = body.proxy?.trim() || undefined
+    config.accounts![accountIndex].proxy = newProxy
+
+    if (config.activeAccountId === accountId) {
+      state.proxy = newProxy
+    }
+
+    await saveConfig(config)
+  }
+
+  return c.json({
+    success: true,
+    account: {
+      id: config.accounts![accountIndex].id,
+      login: config.accounts![accountIndex].login,
+      proxy: config.accounts![accountIndex].proxy ?? null,
     },
   })
 })
@@ -83,6 +123,7 @@ adminRoutes.post("/api/accounts/:id/activate", async (c) => {
   // Update state with new token
   state.githubToken = account.token
   state.accountType = account.accountType
+  state.proxy = account.proxy
 
   // Refresh Copilot token with new account
   try {
@@ -438,5 +479,6 @@ adminRoutes.delete("/api/model-mappings/:from", async (c) => {
 
 // Serve static HTML for admin UI
 adminRoutes.get("/", (c) => {
+  c.header("Cache-Control", "no-store, no-cache, must-revalidate")
   return c.html(adminHtml)
 })

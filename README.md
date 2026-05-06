@@ -4,8 +4,8 @@
 
 > [!NOTE]
 > **About This Fork**
-> This project is forked from [ericc-ch/copilot-api](https://github.com/ericc-ch/copilot-api). Since the original author has discontinued maintenance and no longer supports the new API, we have redesigned and rewritten it.
-> Special thanks to [@ericc-ch](https://github.com/ericc-ch) for the original work and contribution!
+> This project is forked from [ericc-ch/copilot-api](https://github.com/ericc-ch/copilot-api) and [yuegongzi/copilot-api](https://github.com/yuegongzi/copilot-api). Since the original author has discontinued maintenance and no longer supports the new API, we have redesigned and rewritten it.
+> Special thanks to [@ericc-ch](https://github.com/ericc-ch) and [@yuegongzi](https://github.com/yuegongzi) for the original work and contribution!
 
 > [!WARNING]
 > This is a reverse-engineered proxy of GitHub Copilot API. It is not supported by GitHub, and may break unexpectedly. Use at your own risk.
@@ -165,7 +165,7 @@ docker run -d \
   -e LOCAL_ACCESS_PASSWORD="${LOCAL_ACCESS_PASSWORD}" \
   -v copilot-data:/data \
   --restart unless-stopped \
-  ghcr.io/yuegongzi/copilot-api:latest
+  ghcr.io/zhuxu222/copilot-api:latest
 ```
 
 `LOCAL_ACCESS_MODE=container-bridge` is an explicit opt-in for this localhost-published Docker pattern. Do not combine it with `-p 4141:4141` or any other non-localhost publish target. When enabled, `/admin` and `/token` also require HTTP Basic auth with username `copilot` and the password from `LOCAL_ACCESS_PASSWORD`.
@@ -194,11 +194,12 @@ The admin panel allows you to:
 | `HOST` | `127.0.0.1` | Bind address for the HTTP listener. Set to `0.0.0.0` only when you intentionally need container port publishing |
 | `LOCAL_ACCESS_MODE` | `loopback` | Access policy for `/admin` and `/token`. Use `container-bridge` only when the container port is published to `127.0.0.1` on the host |
 | `LOCAL_ACCESS_PASSWORD` | - | Required when `LOCAL_ACCESS_MODE=container-bridge`. Used as the HTTP Basic auth password for `/admin` and `/token` with username `copilot` |
+| `API_KEY` | - | Optional. When set, all `/v1/*` API endpoints require `Authorization: Bearer <API_KEY>`. Recommended when exposing the API to LAN clients |
 | `VERBOSE` | `false` | Enable verbose logging (also accepts `DEBUG=true`) |
 | `RATE_LIMIT` | - | Minimum seconds between requests |
 | `RATE_LIMIT_WAIT` | `false` | Wait instead of error when rate limit is hit |
 | `SHOW_TOKEN` | `false` | Display tokens in logs |
-| `PROXY_ENV` | `false` | Use `HTTP_PROXY`/`HTTPS_PROXY` from environment |
+| `PROXY_ENV` | `false` | Use `HTTP_PROXY`/`HTTPS_PROXY` from environment as fallback proxy |
 
 ### Docker Compose Example with Options
 
@@ -296,7 +297,7 @@ More options: [Claude Code settings](https://docs.anthropic.com/en/docs/claude-c
 If you want Claude Code to inject an extra marker during the `SubagentStart` hook so `copilot-api` can more reliably distinguish initiator overrides, you can install the optional plugin directly from this repository:
 
 ```bash
-/plugin marketplace add https://github.com/yuegongzi/copilot-api.git
+/plugin marketplace add https://github.com/zhuxu222/copilot-api.git
 /plugin install copilot-api-subagent-marker@copilot-api-marketplace
 ```
 
@@ -315,7 +316,8 @@ The configuration file is stored at `/data/copilot-api/config.json` inside the c
       "avatarUrl": "https://...",
       "token": "gho_xxxx",
       "accountType": "individual",
-      "createdAt": "2025-01-27T..."
+      "createdAt": "2025-01-27T...",
+      "proxy": "http://10.62.216.80:8000"
     }
   ],
   "activeAccountId": "12345",
@@ -333,13 +335,70 @@ The configuration file is stored at `/data/copilot-api/config.json` inside the c
 
 | Key | Description |
 |-----|-------------|
-| `accounts` | List of configured GitHub accounts |
+| `accounts` | List of configured GitHub accounts (each may include an optional `proxy` field) |
 | `activeAccountId` | Currently active account ID |
 | `extraPrompts` | Per-model prompts appended to system messages |
 | `smallModel` | Fallback model for warmup requests (default: `gpt-5-mini`) |
 | `modelReasoningEfforts` | Per-model reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) |
 | `rateLimitSeconds` | Saved global minimum interval between requests when `RATE_LIMIT` env is not set |
 | `rateLimitWait` | Saved wait behavior when rate limit is hit and `RATE_LIMIT_WAIT` env is not set |
+
+## Per-Account Proxy
+
+Each GitHub account can be configured with its own HTTP(S) proxy. This is useful when:
+
+- Some accounts need to route through a corporate proxy while others use direct connection
+- Different accounts are used in different network environments
+
+### Configuring Proxy
+
+1. Open the admin panel at **http://localhost:4141/admin**
+2. In the **Accounts** tab, click the **Set Proxy** button next to the account
+3. Enter the proxy URL (e.g., `http://10.62.216.80:8000`) or leave empty for direct connection
+4. The proxy setting takes effect immediately for the active account
+
+The proxy is applied to both Copilot API calls and GitHub API calls (OAuth, token refresh, usage queries) for that account.
+
+### Proxy Priority
+
+1. **Per-account proxy** (set via admin UI) — highest priority
+2. **Environment proxy** (`PROXY_ENV=true` + `HTTP_PROXY`/`HTTPS_PROXY`) — fallback when account has no proxy configured
+3. **Direct connection** — when neither is set
+
+## LAN Access
+
+To allow LAN clients (e.g., other machines on your network) to use the API:
+
+```bash
+export LOCAL_ACCESS_PASSWORD="$(openssl rand -base64 24)"
+export API_KEY="$(openssl rand -base64 24)"  # Protect API endpoints
+
+docker compose up -d
+```
+
+Then update `docker-compose.yml` to publish the port to your LAN interface:
+
+```yaml
+ports:
+  - "4141:4141"  # Instead of 127.0.0.1:4141:4141
+```
+
+**Security considerations for LAN access:**
+
+- **Admin panel (`/admin`)**: Protected by HTTP Basic Auth (username `copilot`, password from `LOCAL_ACCESS_PASSWORD`)
+- **Token endpoint (`/token`)**: Same protection as admin panel
+- **API endpoints (`/v1/*`)**: Protected by API Key (`Authorization: Bearer <API_KEY>`). Without `API_KEY` set, these endpoints are open
+
+Clients on the LAN configure the API key like:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://<lan-ip>:4141",
+    "ANTHROPIC_AUTH_TOKEN": "<API_KEY>"
+  }
+}
+```
 
 ## Development
 

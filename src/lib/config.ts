@@ -10,6 +10,8 @@ export interface AccountConfig {
   token: string
   accountType: "individual" | "business" | "enterprise"
   createdAt: string
+  /** HTTP(S) proxy URL for this account, e.g. "http://10.62.216.80:8000". Omit for direct connection. */
+  proxy?: string
 }
 
 export interface AppConfig {

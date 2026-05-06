@@ -2,6 +2,7 @@ import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { logger } from "hono/logger"
 
+import { apiKeyMiddleware } from "~/lib/api-auth"
 import { getLocalhostCorsOrigins } from "~/lib/local-security"
 
 import { adminRoutes } from "./routes/admin/route"
@@ -21,6 +22,9 @@ server.use(
     origin: getLocalhostCorsOrigins(),
   }),
 )
+
+// API Key authentication for /v1/* endpoints (no-op when API_KEY is not set)
+server.use("/v1/*", apiKeyMiddleware)
 
 server.get("/", (c) => c.text("Server running"))
 

@@ -20,11 +20,15 @@ services:
       - HOST=0.0.0.0
       - LOCAL_ACCESS_MODE=container-bridge
       - LOCAL_ACCESS_PASSWORD=${LOCAL_ACCESS_PASSWORD:?Set LOCAL_ACCESS_PASSWORD in your shell or .env before running docker compose up}
+      # Optional: API key for LAN API access
+      # - API_KEY=${API_KEY:-}
       # Optional: Enable verbose logging
       # - VERBOSE=true
       # Optional: Rate limit (seconds between requests)
       # - RATE_LIMIT=5
       # - RATE_LIMIT_WAIT=true
+      # Optional: Use HTTP_PROXY/HTTPS_PROXY env vars as fallback proxy
+      # - PROXY_ENV=true
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:${PORT:-4141}/"]

@@ -12,6 +12,7 @@ import {
 import { ContextOverflowError, isContextOverflow } from "~/lib/copilot-error"
 import { copilotTokenManager } from "~/lib/copilot-token-manager"
 import { HTTPError } from "~/lib/error"
+import { getDispatcher } from "~/lib/proxy"
 import { state } from "~/lib/state"
 
 /**
@@ -105,10 +106,12 @@ export async function copilotRequest(
   const copilotFetch = createCopilotFetch()
   const url = `${copilotBaseUrl(state)}${options.path}`
   const method = options.method ?? "POST"
+  const dispatcher = getDispatcher(state.proxy)
 
   const response = await copilotFetch(url, {
     method,
     headers,
+    ...(dispatcher && { dispatcher }),
     ...(options.body !== undefined && {
       body: JSON.stringify(options.body),
     }),

@@ -4,8 +4,8 @@
 
 > [!NOTE]
 > **关于本分支**
-> 本项目 fork 自 [ericc-ch/copilot-api](https://github.com/ericc-ch/copilot-api)。由于原作者已停止维护且不再支持新 API，我们对其进行了重新设计和重写。
-> 特别感谢 [@ericc-ch](https://github.com/ericc-ch) 的原创工作和贡献！
+> 本项目 fork 自 [ericc-ch/copilot-api](https://github.com/ericc-ch/copilot-api) 和 [yuegongzi/copilot-api](https://github.com/yuegongzi/copilot-api)。由于原作者已停止维护且不再支持新 API，我们对其进行了重新设计和重写。
+> 特别感谢 [@ericc-ch](https://github.com/ericc-ch) 和 [@yuegongzi](https://github.com/yuegongzi) 的原创工作和贡献！
 
 > [!WARNING]
 > 这是一个 GitHub Copilot API 的逆向代理。它不受 GitHub 官方支持，可能会意外失效。使用风险自负。
@@ -165,7 +165,7 @@ docker run -d \
   -e LOCAL_ACCESS_PASSWORD="${LOCAL_ACCESS_PASSWORD}" \
   -v copilot-data:/data \
   --restart unless-stopped \
-  ghcr.io/yuegongzi/copilot-api:latest
+  ghcr.io/zhuxu222/copilot-api:latest
 ```
 
 `LOCAL_ACCESS_MODE=container-bridge` 是专门为“只发布到 localhost 的 Docker 用法”准备的显式开关。不要把它和 `-p 4141:4141` 或任何非 localhost 的端口发布方式一起使用。启用后，`/admin` 和 `/token` 还会额外要求 HTTP Basic Auth，用户名固定为 `copilot`，密码来自 `LOCAL_ACCESS_PASSWORD`。
@@ -197,8 +197,9 @@ docker run -d \
 | `VERBOSE` | `false` | 启用详细日志（也接受 `DEBUG=true`） |
 | `RATE_LIMIT` | - | 请求之间的最小间隔秒数 |
 | `RATE_LIMIT_WAIT` | `false` | 达到速率限制时等待而不是返回错误 |
+| `API_KEY` | - | 可选。设置后所有 `/v1/*` API 端点需要 `Authorization: Bearer <API_KEY>`。暴露 API 给局域网时建议设置 |
 | `SHOW_TOKEN` | `false` | 在日志中显示令牌 |
-| `PROXY_ENV` | `false` | 从环境变量使用 `HTTP_PROXY`/`HTTPS_PROXY` |
+| `PROXY_ENV` | `false` | 从环境变量使用 `HTTP_PROXY`/`HTTPS_PROXY` 作为备用代理 |
 
 ### 带选项的 Docker Compose 示例
 
@@ -296,7 +297,7 @@ volumes:
 如果您希望 Claude Code 在 `SubagentStart` hook 中注入一个额外 marker，帮助 `copilot-api` 更稳定地区分 initiator override，可以直接从本仓库安装可选插件：
 
 ```bash
-/plugin marketplace add https://github.com/yuegongzi/copilot-api.git
+/plugin marketplace add https://github.com/zhuxu222/copilot-api.git
 /plugin install copilot-api-subagent-marker@copilot-api-marketplace
 ```
 
@@ -315,7 +316,8 @@ volumes:
       "avatarUrl": "https://...",
       "token": "gho_xxxx",
       "accountType": "individual",
-      "createdAt": "2025-01-27T..."
+      "createdAt": "2025-01-27T...",
+      "proxy": "http://10.62.216.80:8000"
     }
   ],
   "activeAccountId": "12345",
@@ -333,13 +335,70 @@ volumes:
 
 | 键 | 描述 |
 |----|------|
-| `accounts` | 已配置的 GitHub 账户列表 |
+| `accounts` | 已配置的 GitHub 账户列表（每个账户可包含可选的 `proxy` 字段） |
 | `activeAccountId` | 当前活跃账户 ID |
 | `extraPrompts` | 附加到系统消息的每模型提示 |
 | `smallModel` | 预热请求的备用模型（默认：`gpt-5-mini`） |
 | `modelReasoningEfforts` | 每模型推理强度（`none`、`minimal`、`low`、`medium`、`high`、`xhigh`） |
 | `rateLimitSeconds` | 当未设置 `RATE_LIMIT` 环境变量时，保存的全局最小请求间隔 |
 | `rateLimitWait` | 当未设置 `RATE_LIMIT_WAIT` 环境变量时，命中限流后的保存等待策略 |
+
+## 按账号配置代理
+
+每个 GitHub 账号可以配置独立的 HTTP(S) 代理。适用场景：
+
+- 部分账号需要通过企业代理访问，其他账号直连
+- 不同账号在不同网络环境中使用
+
+### 配置方法
+
+1. 打开管理面板 **http://localhost:4141/admin**
+2. 在 **Accounts** 标签页，点击账号旁边的 **Set Proxy** 按钮
+3. 输入代理 URL（如 `http://10.62.216.80:8000`），留空则直连
+4. 代理设置对当前活跃账号立即生效
+
+代理会应用于该账号的 Copilot API 调用和 GitHub API 调用（OAuth、Token 刷新、使用量查询）。
+
+### 代理优先级
+
+1. **账号级代理**（通过管理页面设置）— 最高优先级
+2. **环境变量代理**（`PROXY_ENV=true` + `HTTP_PROXY`/`HTTPS_PROXY`）— 账号未配置代理时的备用方案
+3. **直连** — 以上均未设置时
+
+## 局域网访问
+
+允许局域网内的其他设备使用 API：
+
+```bash
+export LOCAL_ACCESS_PASSWORD="$(openssl rand -base64 24)"
+export API_KEY="$(openssl rand -base64 24)"  # 保护 API 端点
+
+docker compose up -d
+```
+
+然后修改 `docker-compose.yml` 将端口发布到局域网：
+
+```yaml
+ports:
+  - "4141:4141"  # 替代 127.0.0.1:4141:4141
+```
+
+**局域网访问的安全措施：**
+
+- **管理面板 (`/admin`)**：HTTP Basic Auth 保护（用户名 `copilot`，密码来自 `LOCAL_ACCESS_PASSWORD`）
+- **Token 端点 (`/token`)**：与管理面板相同保护
+- **API 端点 (`/v1/*`)**：API Key 保护（`Authorization: Bearer <API_KEY>`）。未设置 `API_KEY` 时这些端点无需鉴权
+
+局域网客户端配置示例：
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://<局域网IP>:4141",
+    "ANTHROPIC_AUTH_TOKEN": "<API_KEY>"
+  }
+}
+```
 
 ## 开发
 

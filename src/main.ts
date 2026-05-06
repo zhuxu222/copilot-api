@@ -58,6 +58,10 @@ async function main(): Promise<void> {
   if (activeAccount) {
     state.githubToken = activeAccount.token
     state.accountType = activeAccount.accountType
+    state.proxy = activeAccount.proxy
+    if (state.proxy) {
+      consola.info(`Using proxy for ${activeAccount.login}: ${state.proxy}`)
+    }
     consola.info(`Logged in as ${activeAccount.login}`)
 
     if (state.showToken) {

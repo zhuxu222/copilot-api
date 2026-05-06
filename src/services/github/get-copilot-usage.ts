@@ -1,10 +1,17 @@
 import { GITHUB_API_BASE_URL, githubHeaders } from "~/lib/api-config"
 import { HTTPError } from "~/lib/error"
+import { resolveProxyDispatcher } from "~/lib/proxy"
 import { state } from "~/lib/state"
 
 export const getCopilotUsage = async (): Promise<CopilotUsageResponse> => {
+  const dispatcher = resolveProxyDispatcher(
+    state.proxy,
+    process.env.PROXY_ENV === "true",
+  )
+
   const response = await fetch(`${GITHUB_API_BASE_URL}/copilot_internal/user`, {
     headers: githubHeaders(state),
+    ...(dispatcher && { dispatcher }),
   })
 
   if (!response.ok) {

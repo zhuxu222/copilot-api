@@ -168,6 +168,442 @@ export const adminHtml = `<!DOCTYPE html>
   </style>
 </head>
 <body>
+  <script>
+    // Fetch does NOT include HTTP Basic Auth credentials by default, even for
+    // same-origin requests. Override to inject credentials so the browser
+    // attaches the Authorization header to every API call automatically.
+    (function() {
+      var _fetch = window.fetch;
+      window.fetch = function(url, opts) {
+        if (!opts) opts = {};
+        if (opts.credentials === undefined) opts.credentials = 'include';
+        return _fetch(url, opts);
+      };
+    })();
+
+    // All DOM-dependent initialization runs after the document is fully parsed
+    document.addEventListener('DOMContentLoaded', function() {
+      const API_BASE = '/admin/api';
+      let pollInterval = null;
+      let authStatus = {
+        authenticated: false,
+        hasAccounts: false,
+        activeAccount: null,
+      };
+      function escHtml(s) {
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+      function renderCardEmptyState(elementId, message) {
+        document.getElementById(elementId).innerHTML = '<div class="empty-state">' + escHtml(message) + '</div>';
+      }
+      function getModelsUnavailableMessage() {
+        return authStatus.hasAccounts
+          ? 'Reconnect the active GitHub account to load models.'
+          : 'Add a GitHub account to load models.';
+      }
+      function getUsageUnavailableMessage() {
+        return authStatus.hasAccounts
+          ? 'Reconnect the active GitHub account to load usage data.'
+          : 'Add a GitHub account to load usage data.';
+      }
+      function getModelSuggestionPlaceholder() {
+        return authStatus.hasAccounts
+          ? 'Target model (reconnect account to load suggestions)'
+          : 'Target model (add account to load suggestions)';
+      }
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+          document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+          tab.classList.add('active');
+          document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+          if (tab.dataset.tab === 'settings') fetchSettings();
+          if (tab.dataset.tab === 'models') fetchModels();
+          if (tab.dataset.tab === 'usage') fetchUsage();
+          if (tab.dataset.tab === 'model-mappings') fetchMappings();
+        });
+      });
+      async function fetchSettings() {
+        try {
+          const res = await fetch(API_BASE + '/settings');
+          const data = await res.json();
+          document.getElementById('rateLimitSeconds').value = data.rateLimitSeconds ?? '';
+          document.getElementById('rateLimitWait').checked = Boolean(data.rateLimitWait);
+
+          const notices = [];
+          notices.push('This rate limit is process-wide, not per account or per client.');
+          if (data.envOverride?.rateLimitSeconds || data.envOverride?.rateLimitWait) {
+            const overrides = [];
+            if (data.envOverride.rateLimitSeconds) overrides.push('RATE_LIMIT');
+            if (data.envOverride.rateLimitWait) overrides.push('RATE_LIMIT_WAIT');
+            notices.push('Environment variables currently override: ' + overrides.join(', ') + '.');
+          } else {
+            notices.push('Saved values apply immediately and persist in config.json.');
+          }
+          document.getElementById('settingsNotice').textContent = notices.join(' ');
+        } catch (e) {
+          document.getElementById('settingsNotice').textContent = 'Failed to load settings.';
+        }
+      }
+      async function saveSettings() {
+        const btn = document.getElementById('saveSettingsBtn');
+        const rawValue = document.getElementById('rateLimitSeconds').value.trim();
+        const rateLimitSeconds = rawValue === '' ? null : Number(rawValue);
+        const rateLimitWait = document.getElementById('rateLimitWait').checked;
+
+        if (rawValue !== '' && (!Number.isFinite(rateLimitSeconds) || rateLimitSeconds <= 0)) {
+          alert('Rate limit seconds must be greater than 0, or left empty.');
+          return;
+        }
+
+        btn.disabled = true;
+        try {
+          const res = await fetch(API_BASE + '/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rateLimitSeconds, rateLimitWait })
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            alert(data.error?.message || 'Failed to save settings');
+            return;
+          }
+          await fetchSettings();
+        } catch (e) {
+          alert('Failed to save settings');
+        } finally {
+          btn.disabled = false;
+        }
+      }
+      async function fetchAccounts() {
+        try {
+          const res = await fetch(API_BASE + '/accounts');
+          const data = await res.json();
+          renderAccounts(data);
+        } catch (e) {
+          document.getElementById('accountList').innerHTML = '<li class="empty-state">Failed to load accounts</li>';
+        }
+      }
+      async function fetchStatus() {
+        try {
+          const res = await fetch(API_BASE + '/auth/status');
+          const data = await res.json();
+          authStatus = {
+            authenticated: Boolean(data.authenticated),
+            hasAccounts: Boolean(data.hasAccounts),
+            activeAccount: data.activeAccount || null,
+          };
+          const dot = document.getElementById('statusDot');
+          const text = document.getElementById('statusText');
+          if (authStatus.authenticated) {
+            dot.classList.add('online');
+            text.textContent = 'Connected as ' + (authStatus.activeAccount?.login || 'Unknown');
+          } else {
+            dot.classList.remove('online');
+            text.textContent = 'Not authenticated';
+          }
+          return authStatus;
+        } catch (e) {
+          authStatus = {
+            authenticated: false,
+            hasAccounts: false,
+            activeAccount: null,
+          };
+          document.getElementById('statusText').textContent = 'Connection error';
+          return authStatus;
+        }
+      }
+      function renderAccounts(data) {
+        const list = document.getElementById('accountList');
+        if (!data.accounts || data.accounts.length === 0) {
+          list.innerHTML = '<li class="empty-state">No accounts configured. Click "Add Account" to get started.</li>';
+          return;
+        }
+        list.innerHTML = data.accounts.map(acc => {
+          const proxyInfo = acc.proxy ? '<div style="font-size:0.75rem;color:#58a6ff;margin-top:0.25rem;">Proxy: ' + escHtml(acc.proxy) + '</div>' : '';
+          return '<li class="account-item ' + (acc.isActive ? 'active' : '') + '">' +
+          '<img class="account-avatar" src="' + escHtml(acc.avatarUrl || '') + '" alt="" onerror="this.style.display=\\'none\\'">' +
+          '<div class="account-info"><div class="account-name">' + escHtml(acc.login) + '</div><div class="account-type">' + escHtml(acc.accountType) + '</div>' + proxyInfo + '</div>' +
+          (acc.isActive ? '<span class="account-badge">Active</span>' : '') +
+          '<div class="account-actions">' +
+          '<button class="btn btn-sm" data-action="edit-proxy" data-id="' + escHtml(acc.id) + '" data-login="' + escHtml(acc.login) + '" data-proxy="' + escHtml(acc.proxy || '') + '">Set Proxy</button>' +
+          (!acc.isActive ? '<button class="btn btn-sm" data-action="switch" data-id="' + escHtml(acc.id) + '">Switch</button>' : '') +
+          '<button class="btn btn-sm btn-danger" data-action="delete-account" data-id="' + escHtml(acc.id) + '" data-login="' + escHtml(acc.login) + '">Delete</button>' +
+          '</div></li>';
+        }).join('');
+      }
+      async function switchAccount(id) {
+        if (!confirm('Switch to this account?')) return;
+        try {
+          const res = await fetch(API_BASE + '/accounts/' + id + '/activate', { method: 'POST' });
+          if (res.ok) { fetchAccounts(); fetchStatus(); }
+          else { const data = await res.json(); alert(data.error?.message || 'Failed to switch account'); }
+        } catch (e) { alert('Failed to switch account'); }
+      }
+      async function deleteAccount(id, login) {
+        if (!confirm('Delete account "' + login + '"? This cannot be undone.')) return;
+        try {
+          const res = await fetch(API_BASE + '/accounts/' + id, { method: 'DELETE' });
+          if (res.ok) { fetchAccounts(); fetchStatus(); }
+          else { const data = await res.json(); alert(data.error?.message || 'Failed to delete account'); }
+        } catch (e) { alert('Failed to delete account'); }
+      }
+      async function editAccountProxy(id, login, currentProxy) {
+        const newProxy = prompt('Set proxy URL for ' + login + ':\\n\\nLeave empty for direct connection.\\nFormat: http://host:port', currentProxy || '');
+        if (newProxy === null) return;
+        try {
+          const res = await fetch(API_BASE + '/accounts/' + id, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proxy: newProxy.trim() || null })
+          });
+          if (res.ok) { fetchAccounts(); fetchStatus(); }
+          else { const data = await res.json(); alert(data.error?.message || 'Failed to update proxy'); }
+        } catch (e) { alert('Failed to update proxy'); }
+      }
+      async function fetchModels() {
+        const btn = document.getElementById('refreshModels');
+        btn.classList.add('loading');
+        try {
+          const status = await fetchStatus();
+          if (!status.authenticated) {
+            renderCardEmptyState('modelsList', getModelsUnavailableMessage());
+            return;
+          }
+          const res = await fetch('/v1/models');
+          if (!res.ok) throw new Error('Failed to load models');
+          const data = await res.json();
+          renderModels(data);
+        } catch (e) {
+          renderCardEmptyState('modelsList', 'Failed to load models. Please try again.');
+        } finally { btn.classList.remove('loading'); }
+      }
+      function renderModels(data) {
+        const container = document.getElementById('modelsList');
+        if (!data.data || data.data.length === 0) {
+          container.innerHTML = '<div class="empty-state">No models available</div>';
+          return;
+        }
+        container.innerHTML = data.data.map(model => {
+          const isPremium = model.id.includes('o1') || model.id.includes('o3') || model.id.includes('claude');
+          return '<div class="model-card"><div class="model-name">' + escHtml(model.id) + '</div><div class="model-id">' + escHtml(model.object || 'model') + '</div>' +
+            (isPremium ? '<span class="model-badge premium">Premium</span>' : '') + '</div>';
+        }).join('');
+      }
+      async function fetchUsage() {
+        const btn = document.getElementById('refreshUsage');
+        btn.classList.add('loading');
+        try {
+          const status = await fetchStatus();
+          if (!status.authenticated) {
+            renderCardEmptyState('usageContent', getUsageUnavailableMessage());
+            return;
+          }
+          const res = await fetch('/usage');
+          if (!res.ok) throw new Error('Failed to load usage');
+          const data = await res.json();
+          renderUsage(data);
+        } catch (e) {
+          renderCardEmptyState('usageContent', 'Failed to load usage data. Please try again.');
+        } finally { btn.classList.remove('loading'); }
+      }
+      function renderUsage(data) {
+        const container = document.getElementById('usageContent');
+        if (!data.quota_snapshots) {
+          container.innerHTML = '<div class="empty-state">No usage data available</div>';
+          return;
+        }
+        const quotas = data.quota_snapshots;
+        let html = '<div class="usage-grid">';
+        for (const [key, quota] of Object.entries(quotas)) {
+          const percentUsed = quota.unlimited ? 0 : (100 - quota.percent_remaining);
+          const used = quota.unlimited ? 0 : (quota.entitlement - quota.remaining);
+          let barColor = 'green';
+          if (percentUsed > 75) barColor = 'yellow';
+          if (percentUsed > 90) barColor = 'red';
+          if (quota.unlimited) barColor = 'blue';
+          html += '<div class="usage-card"><div class="usage-header"><span class="usage-title">' + key.replace(/_/g, ' ') + '</span>' +
+            '<span class="usage-percent">' + (quota.unlimited ? 'Unlimited' : percentUsed.toFixed(1) + '% used') + '</span></div>' +
+            '<div class="usage-bar"><div class="usage-bar-fill ' + barColor + '" style="width: ' + (quota.unlimited ? 100 : percentUsed) + '%"></div></div>' +
+            '<div class="usage-stats"><span>' + (quota.unlimited ? '∞' : used.toLocaleString()) + ' / ' + (quota.unlimited ? '∞' : quota.entitlement.toLocaleString()) + '</span>' +
+            '<span>' + (quota.unlimited ? '∞' : quota.remaining.toLocaleString()) + ' remaining</span></div></div>';
+        }
+        html += '</div>';
+        html += '<div class="usage-info"><div class="usage-info-row"><span class="usage-info-label">Plan</span><span>' + (data.copilot_plan || 'Unknown') + '</span></div>' +
+          '<div class="usage-info-row"><span class="usage-info-label">Quota Reset Date</span><span>' + (data.quota_reset_date ? new Date(data.quota_reset_date).toLocaleDateString() : 'N/A') + '</span></div>' +
+          '<div class="usage-info-row"><span class="usage-info-label">Chat Enabled</span><span>' + (data.chat_enabled ? 'Yes' : 'No') + '</span></div></div>';
+        container.innerHTML = html;
+      }
+      function showModal(show) {
+        document.getElementById('authModal').classList.toggle('active', show);
+        if (!show && pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+      }
+      function showStep(step) {
+        document.getElementById('authStep1').style.display = step === 1 ? 'block' : 'none';
+        document.getElementById('authStep2').style.display = step === 2 ? 'block' : 'none';
+        document.getElementById('authStep3').style.display = step === 3 ? 'block' : 'none';
+      }
+      async function startAuth() {
+        try {
+          const res = await fetch(API_BASE + '/auth/device-code', { method: 'POST' });
+          const data = await res.json();
+          if (data.error) { alert(data.error.message); return; }
+          document.getElementById('deviceCode').textContent = data.userCode;
+          document.getElementById('verificationLink').href = data.verificationUri;
+          showStep(2);
+          const accountType = document.getElementById('accountType').value;
+          let currentInterval = data.interval || 5;
+          pollInterval = setInterval(() => pollAuth(data.deviceCode, accountType), currentInterval * 1000);
+        } catch (e) { alert('Failed to start authorization'); }
+      }
+      let currentInterval = 5;
+      async function pollAuth(deviceCode, accountType) {
+        try {
+          const res = await fetch(API_BASE + '/auth/poll', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deviceCode, accountType })
+          });
+          const data = await res.json();
+          if (data.success) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+            showStep(3);
+            setTimeout(() => { fetchAccounts(); fetchStatus(); }, 500);
+          } else if (data.error) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+            alert(data.error.message);
+            showStep(1);
+          } else if (data.slowDown && data.interval) {
+            clearInterval(pollInterval);
+            currentInterval = data.interval;
+            pollInterval = setInterval(() => pollAuth(deviceCode, accountType), currentInterval * 1000);
+          }
+        } catch (e) {
+          // Poll error - will retry on next interval
+        }
+      }
+      document.getElementById('addAccountBtn').addEventListener('click', () => { showStep(1); showModal(true); });
+      document.getElementById('cancelAuth').addEventListener('click', () => showModal(false));
+      document.getElementById('cancelAuth2').addEventListener('click', () => showModal(false));
+      document.getElementById('closeAuth').addEventListener('click', () => { showModal(false); showStep(1); });
+      document.getElementById('startAuth').addEventListener('click', startAuth);
+      document.getElementById('refreshModels').addEventListener('click', fetchModels);
+      document.getElementById('refreshUsage').addEventListener('click', fetchUsage);
+      document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
+      document.addEventListener('click', (e) => {
+        if (!(e.target instanceof Element)) return;
+        const actionEl = e.target.closest('[data-action]');
+        if (!actionEl) return;
+        const { action, id, login, from, proxy } = actionEl.dataset;
+        if (action === 'switch' && id) {
+          switchAccount(id);
+        } else if (action === 'delete-account' && id) {
+          deleteAccount(id, login || '');
+        } else if (action === 'delete-mapping' && from) {
+          deleteMapping(from);
+        } else if (action === 'edit-proxy' && id) {
+          editAccountProxy(id, login || '', proxy || '');
+        }
+      });
+
+      fetchAccounts();
+      fetchStatus();
+      fetchSettings();
+
+      // Model Mappings
+      async function fetchMappings() {
+        try {
+          const res = await fetch(API_BASE + '/model-mappings');
+          const data = await res.json();
+          renderMappings(data.modelMapping || {});
+        } catch (e) {
+          document.getElementById('mappingList').innerHTML = '<tr><td colspan="3" class="empty-state">Failed to load mappings</td></tr>';
+        }
+      }
+      function renderMappings(mappings) {
+        const tbody = document.getElementById('mappingList');
+        const entries = Object.entries(mappings);
+        if (entries.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="3" class="empty-state">No mappings configured.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = entries.map(([from, to]) =>
+          '<tr style="border-bottom:1px solid #21262d;">' +
+          '<td style="padding:0.5rem 1rem; font-family:monospace;">' + escHtml(from) + '</td>' +
+          '<td style="padding:0.5rem 1rem; font-family:monospace;">' + escHtml(to) + '</td>' +
+          '<td style="padding:0.5rem 1rem;"><button class="btn btn-danger btn-sm" data-action="delete-mapping" data-from="' + escHtml(from) + '">Delete</button></td>' +
+          '</tr>'
+        ).join('');
+      }
+      async function deleteMapping(from) {
+        if (!confirm('Delete mapping for "' + from + '"?')) return;
+        try {
+          const res = await fetch(API_BASE + '/model-mappings/' + encodeURIComponent(from), { method: 'DELETE' });
+          if (res.ok) fetchMappings();
+          else { const d = await res.json(); alert(d.error?.message || 'Failed'); }
+        } catch (e) { alert('Failed to delete mapping'); }
+      }
+      window.deleteMapping = deleteMapping;
+      async function loadModelOptions() {
+        const input = document.getElementById('mappingTo');
+        const optionList = document.getElementById('mappingToOptions');
+        input.value = '';
+        optionList.innerHTML = '';
+        try {
+          const status = await fetchStatus();
+          if (!status.authenticated) {
+            input.placeholder = getModelSuggestionPlaceholder();
+            return;
+          }
+          const res = await fetch('/v1/models');
+          if (!res.ok) throw new Error('Failed to load model suggestions');
+          const data = await res.json();
+          input.placeholder = 'Target model';
+          optionList.innerHTML = (data.data || [])
+            .map(m => '<option value="' + escHtml(m.id) + '"></option>')
+            .join('');
+        } catch (e) {
+          input.placeholder = 'Target model (failed to load suggestions)';
+        }
+      }
+      document.getElementById('addMappingBtn').addEventListener('click', () => {
+        document.getElementById('mappingFormArea').style.display = 'block';
+        document.getElementById('mappingFrom').value = '';
+        loadModelOptions();
+        document.getElementById('mappingFrom').focus();
+      });
+      document.getElementById('cancelMappingBtn').addEventListener('click', () => {
+        document.getElementById('mappingFormArea').style.display = 'none';
+      });
+      document.getElementById('saveMappingBtn').addEventListener('click', async () => {
+        const from = document.getElementById('mappingFrom').value.trim();
+        const to = document.getElementById('mappingTo').value.trim();
+        if (!from || !to) { alert('Both fields are required'); return; }
+        try {
+          const res = await fetch(API_BASE + '/model-mappings/' + encodeURIComponent(from), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to })
+          });
+          if (res.ok) {
+            document.getElementById('mappingFormArea').style.display = 'none';
+            fetchMappings();
+          } else {
+            const d = await res.json();
+            alert(d.error?.message || 'Failed to save');
+          }
+        } catch (e) { alert('Failed to save mapping'); }
+      });
+    });
+  </script>
+  <noscript><div style="background:#da3633;color:#fff;padding:1rem;margin-bottom:1rem;border-radius:6px;">JavaScript is disabled or blocked. Please enable JavaScript to use this admin panel.</div></noscript>
   <div class="container">
     <h1>
       <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"></path></svg>
@@ -300,410 +736,5 @@ export const adminHtml = `<!DOCTYPE html>
       </div>
     </div>
   </div>
-  <script>
-    const API_BASE = '/admin/api';
-    let pollInterval = null;
-    let authStatus = {
-      authenticated: false,
-      hasAccounts: false,
-      activeAccount: null,
-    };
-    function escHtml(s) {
-      return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-    }
-    function renderCardEmptyState(elementId, message) {
-      document.getElementById(elementId).innerHTML = '<div class="empty-state">' + escHtml(message) + '</div>';
-    }
-    function getModelsUnavailableMessage() {
-      return authStatus.hasAccounts
-        ? 'Reconnect the active GitHub account to load models.'
-        : 'Add a GitHub account to load models.';
-    }
-    function getUsageUnavailableMessage() {
-      return authStatus.hasAccounts
-        ? 'Reconnect the active GitHub account to load usage data.'
-        : 'Add a GitHub account to load usage data.';
-    }
-    function getModelSuggestionPlaceholder() {
-      return authStatus.hasAccounts
-        ? 'Target model (reconnect account to load suggestions)'
-        : 'Target model (add account to load suggestions)';
-    }
-    document.querySelectorAll('.tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        tab.classList.add('active');
-        document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-        if (tab.dataset.tab === 'settings') fetchSettings();
-        if (tab.dataset.tab === 'models') fetchModels();
-        if (tab.dataset.tab === 'usage') fetchUsage();
-        if (tab.dataset.tab === 'model-mappings') fetchMappings();
-      });
-    });
-    async function fetchSettings() {
-      try {
-        const res = await fetch(API_BASE + '/settings');
-        const data = await res.json();
-        document.getElementById('rateLimitSeconds').value = data.rateLimitSeconds ?? '';
-        document.getElementById('rateLimitWait').checked = Boolean(data.rateLimitWait);
-
-        const notices = [];
-        notices.push('This rate limit is process-wide, not per account or per client.');
-        if (data.envOverride?.rateLimitSeconds || data.envOverride?.rateLimitWait) {
-          const overrides = [];
-          if (data.envOverride.rateLimitSeconds) overrides.push('RATE_LIMIT');
-          if (data.envOverride.rateLimitWait) overrides.push('RATE_LIMIT_WAIT');
-          notices.push('Environment variables currently override: ' + overrides.join(', ') + '.');
-        } else {
-          notices.push('Saved values apply immediately and persist in config.json.');
-        }
-        document.getElementById('settingsNotice').textContent = notices.join(' ');
-      } catch (e) {
-        document.getElementById('settingsNotice').textContent = 'Failed to load settings.';
-      }
-    }
-    async function saveSettings() {
-      const btn = document.getElementById('saveSettingsBtn');
-      const rawValue = document.getElementById('rateLimitSeconds').value.trim();
-      const rateLimitSeconds = rawValue === '' ? null : Number(rawValue);
-      const rateLimitWait = document.getElementById('rateLimitWait').checked;
-
-      if (rawValue !== '' && (!Number.isFinite(rateLimitSeconds) || rateLimitSeconds <= 0)) {
-        alert('Rate limit seconds must be greater than 0, or left empty.');
-        return;
-      }
-
-      btn.disabled = true;
-      try {
-        const res = await fetch(API_BASE + '/settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rateLimitSeconds, rateLimitWait })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          alert(data.error?.message || 'Failed to save settings');
-          return;
-        }
-        await fetchSettings();
-      } catch (e) {
-        alert('Failed to save settings');
-      } finally {
-        btn.disabled = false;
-      }
-    }
-    async function fetchAccounts() {
-      try {
-        const res = await fetch(API_BASE + '/accounts');
-        const data = await res.json();
-        renderAccounts(data);
-      } catch (e) {
-        document.getElementById('accountList').innerHTML = '<li class="empty-state">Failed to load accounts</li>';
-      }
-    }
-    async function fetchStatus() {
-      try {
-        const res = await fetch(API_BASE + '/auth/status');
-        const data = await res.json();
-        authStatus = {
-          authenticated: Boolean(data.authenticated),
-          hasAccounts: Boolean(data.hasAccounts),
-          activeAccount: data.activeAccount || null,
-        };
-        const dot = document.getElementById('statusDot');
-        const text = document.getElementById('statusText');
-        if (authStatus.authenticated) {
-          dot.classList.add('online');
-          text.textContent = 'Connected as ' + (authStatus.activeAccount?.login || 'Unknown');
-        } else {
-          dot.classList.remove('online');
-          text.textContent = 'Not authenticated';
-        }
-        return authStatus;
-      } catch (e) {
-        authStatus = {
-          authenticated: false,
-          hasAccounts: false,
-          activeAccount: null,
-        };
-        document.getElementById('statusText').textContent = 'Connection error';
-        return authStatus;
-      }
-    }
-    function renderAccounts(data) {
-      const list = document.getElementById('accountList');
-      if (!data.accounts || data.accounts.length === 0) {
-        list.innerHTML = '<li class="empty-state">No accounts configured. Click "Add Account" to get started.</li>';
-        return;
-      }
-      list.innerHTML = data.accounts.map(acc => '<li class="account-item ' + (acc.isActive ? 'active' : '') + '">' +
-        '<img class="account-avatar" src="' + escHtml(acc.avatarUrl || '') + '" alt="" onerror="this.style.display=\\'none\\'">' +
-        '<div class="account-info"><div class="account-name">' + escHtml(acc.login) + '</div><div class="account-type">' + escHtml(acc.accountType) + '</div></div>' +
-        (acc.isActive ? '<span class="account-badge">Active</span>' : '') +
-        '<div class="account-actions">' +
-        (!acc.isActive ? '<button class="btn btn-sm" data-action="switch" data-id="' + escHtml(acc.id) + '">Switch</button>' : '') +
-        '<button class="btn btn-sm btn-danger" data-action="delete-account" data-id="' + escHtml(acc.id) + '" data-login="' + escHtml(acc.login) + '">Delete</button>' +
-        '</div></li>').join('');
-    }
-    async function switchAccount(id) {
-      if (!confirm('Switch to this account?')) return;
-      try {
-        const res = await fetch(API_BASE + '/accounts/' + id + '/activate', { method: 'POST' });
-        if (res.ok) { fetchAccounts(); fetchStatus(); }
-        else { const data = await res.json(); alert(data.error?.message || 'Failed to switch account'); }
-      } catch (e) { alert('Failed to switch account'); }
-    }
-    async function deleteAccount(id, login) {
-      if (!confirm('Delete account "' + login + '"? This cannot be undone.')) return;
-      try {
-        const res = await fetch(API_BASE + '/accounts/' + id, { method: 'DELETE' });
-        if (res.ok) { fetchAccounts(); fetchStatus(); }
-        else { const data = await res.json(); alert(data.error?.message || 'Failed to delete account'); }
-      } catch (e) { alert('Failed to delete account'); }
-    }
-    async function fetchModels() {
-      const btn = document.getElementById('refreshModels');
-      btn.classList.add('loading');
-      try {
-        const status = await fetchStatus();
-        if (!status.authenticated) {
-          renderCardEmptyState('modelsList', getModelsUnavailableMessage());
-          return;
-        }
-        const res = await fetch('/v1/models');
-        if (!res.ok) throw new Error('Failed to load models');
-        const data = await res.json();
-        renderModels(data);
-      } catch (e) {
-        renderCardEmptyState('modelsList', 'Failed to load models. Please try again.');
-      } finally { btn.classList.remove('loading'); }
-    }
-    function renderModels(data) {
-      const container = document.getElementById('modelsList');
-      if (!data.data || data.data.length === 0) {
-        container.innerHTML = '<div class="empty-state">No models available</div>';
-        return;
-      }
-      container.innerHTML = data.data.map(model => {
-        const isPremium = model.id.includes('o1') || model.id.includes('o3') || model.id.includes('claude');
-        return '<div class="model-card"><div class="model-name">' + escHtml(model.id) + '</div><div class="model-id">' + escHtml(model.object || 'model') + '</div>' +
-          (isPremium ? '<span class="model-badge premium">Premium</span>' : '') + '</div>';
-      }).join('');
-    }
-    async function fetchUsage() {
-      const btn = document.getElementById('refreshUsage');
-      btn.classList.add('loading');
-      try {
-        const status = await fetchStatus();
-        if (!status.authenticated) {
-          renderCardEmptyState('usageContent', getUsageUnavailableMessage());
-          return;
-        }
-        const res = await fetch('/usage');
-        if (!res.ok) throw new Error('Failed to load usage');
-        const data = await res.json();
-        renderUsage(data);
-      } catch (e) {
-        renderCardEmptyState('usageContent', 'Failed to load usage data. Please try again.');
-      } finally { btn.classList.remove('loading'); }
-    }
-    function renderUsage(data) {
-      const container = document.getElementById('usageContent');
-      if (!data.quota_snapshots) {
-        container.innerHTML = '<div class="empty-state">No usage data available</div>';
-        return;
-      }
-      const quotas = data.quota_snapshots;
-      let html = '<div class="usage-grid">';
-      for (const [key, quota] of Object.entries(quotas)) {
-        const percentUsed = quota.unlimited ? 0 : (100 - quota.percent_remaining);
-        const used = quota.unlimited ? 0 : (quota.entitlement - quota.remaining);
-        let barColor = 'green';
-        if (percentUsed > 75) barColor = 'yellow';
-        if (percentUsed > 90) barColor = 'red';
-        if (quota.unlimited) barColor = 'blue';
-        html += '<div class="usage-card"><div class="usage-header"><span class="usage-title">' + key.replace(/_/g, ' ') + '</span>' +
-          '<span class="usage-percent">' + (quota.unlimited ? 'Unlimited' : percentUsed.toFixed(1) + '% used') + '</span></div>' +
-          '<div class="usage-bar"><div class="usage-bar-fill ' + barColor + '" style="width: ' + (quota.unlimited ? 100 : percentUsed) + '%"></div></div>' +
-          '<div class="usage-stats"><span>' + (quota.unlimited ? '∞' : used.toLocaleString()) + ' / ' + (quota.unlimited ? '∞' : quota.entitlement.toLocaleString()) + '</span>' +
-          '<span>' + (quota.unlimited ? '∞' : quota.remaining.toLocaleString()) + ' remaining</span></div></div>';
-      }
-      html += '</div>';
-      html += '<div class="usage-info"><div class="usage-info-row"><span class="usage-info-label">Plan</span><span>' + (data.copilot_plan || 'Unknown') + '</span></div>' +
-        '<div class="usage-info-row"><span class="usage-info-label">Quota Reset Date</span><span>' + (data.quota_reset_date ? new Date(data.quota_reset_date).toLocaleDateString() : 'N/A') + '</span></div>' +
-        '<div class="usage-info-row"><span class="usage-info-label">Chat Enabled</span><span>' + (data.chat_enabled ? 'Yes' : 'No') + '</span></div></div>';
-      container.innerHTML = html;
-    }
-    function showModal(show) {
-      document.getElementById('authModal').classList.toggle('active', show);
-      if (!show && pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-    }
-    function showStep(step) {
-      document.getElementById('authStep1').style.display = step === 1 ? 'block' : 'none';
-      document.getElementById('authStep2').style.display = step === 2 ? 'block' : 'none';
-      document.getElementById('authStep3').style.display = step === 3 ? 'block' : 'none';
-    }
-    async function startAuth() {
-      try {
-        const res = await fetch(API_BASE + '/auth/device-code', { method: 'POST' });
-        const data = await res.json();
-        if (data.error) { alert(data.error.message); return; }
-        document.getElementById('deviceCode').textContent = data.userCode;
-        document.getElementById('verificationLink').href = data.verificationUri;
-        showStep(2);
-        const accountType = document.getElementById('accountType').value;
-        let currentInterval = data.interval || 5;
-        pollInterval = setInterval(() => pollAuth(data.deviceCode, accountType), currentInterval * 1000);
-      } catch (e) { alert('Failed to start authorization'); }
-    }
-    let currentInterval = 5;
-    async function pollAuth(deviceCode, accountType) {
-      try {
-        const res = await fetch(API_BASE + '/auth/poll', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ deviceCode, accountType })
-        });
-        const data = await res.json();
-        console.log('Poll response:', data);
-        if (data.success) {
-          clearInterval(pollInterval);
-          pollInterval = null;
-          showStep(3);
-          setTimeout(() => { fetchAccounts(); fetchStatus(); }, 500);
-        } else if (data.error) {
-          clearInterval(pollInterval);
-          pollInterval = null;
-          alert(data.error.message);
-          showStep(1);
-        } else if (data.slowDown && data.interval) {
-          // GitHub asked us to slow down, update the polling interval
-          console.log('Slow down requested, new interval:', data.interval);
-          clearInterval(pollInterval);
-          currentInterval = data.interval;
-          pollInterval = setInterval(() => pollAuth(deviceCode, accountType), currentInterval * 1000);
-        }
-        // If data.pending is true (without slowDown), continue polling at current interval
-      } catch (e) {
-        console.error('Poll error:', e);
-      }
-    }
-    document.getElementById('addAccountBtn').addEventListener('click', () => { showStep(1); showModal(true); });
-    document.getElementById('cancelAuth').addEventListener('click', () => showModal(false));
-    document.getElementById('cancelAuth2').addEventListener('click', () => showModal(false));
-    document.getElementById('closeAuth').addEventListener('click', () => { showModal(false); showStep(1); });
-    document.getElementById('startAuth').addEventListener('click', startAuth);
-    document.getElementById('refreshModels').addEventListener('click', fetchModels);
-    document.getElementById('refreshUsage').addEventListener('click', fetchUsage);
-    document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
-    document.addEventListener('click', (e) => {
-      if (!(e.target instanceof Element)) return;
-      const actionEl = e.target.closest('[data-action]');
-      if (!actionEl) return;
-      const { action, id, login, from } = actionEl.dataset;
-      if (action === 'switch' && id) {
-        switchAccount(id);
-      } else if (action === 'delete-account' && id) {
-        deleteAccount(id, login || '');
-      } else if (action === 'delete-mapping' && from) {
-        deleteMapping(from);
-      }
-    });
-
-    fetchAccounts();
-    fetchStatus();
-    fetchSettings();
-
-    // Model Mappings
-    async function fetchMappings() {
-      try {
-        const res = await fetch(API_BASE + '/model-mappings');
-        const data = await res.json();
-        renderMappings(data.modelMapping || {});
-      } catch (e) {
-        document.getElementById('mappingList').innerHTML = '<tr><td colspan="3" class="empty-state">Failed to load mappings</td></tr>';
-      }
-    }
-    function renderMappings(mappings) {
-      const tbody = document.getElementById('mappingList');
-      const entries = Object.entries(mappings);
-      if (entries.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" class="empty-state">No mappings configured.</td></tr>';
-        return;
-      }
-      tbody.innerHTML = entries.map(([from, to]) =>
-        '<tr style="border-bottom:1px solid #21262d;">' +
-        '<td style="padding:0.5rem 1rem; font-family:monospace;">' + escHtml(from) + '</td>' +
-        '<td style="padding:0.5rem 1rem; font-family:monospace;">' + escHtml(to) + '</td>' +
-        '<td style="padding:0.5rem 1rem;"><button class="btn btn-danger btn-sm" data-action="delete-mapping" data-from="' + escHtml(from) + '">Delete</button></td>' +
-        '</tr>'
-      ).join('');
-    }
-    async function deleteMapping(from) {
-      if (!confirm('Delete mapping for "' + from + '"?')) return;
-      try {
-        const res = await fetch(API_BASE + '/model-mappings/' + encodeURIComponent(from), { method: 'DELETE' });
-        if (res.ok) fetchMappings();
-        else { const d = await res.json(); alert(d.error?.message || 'Failed'); }
-      } catch (e) { alert('Failed to delete mapping'); }
-    }
-    window.deleteMapping = deleteMapping;
-    async function loadModelOptions() {
-      const input = document.getElementById('mappingTo');
-      const optionList = document.getElementById('mappingToOptions');
-      input.value = '';
-      optionList.innerHTML = '';
-      try {
-        const status = await fetchStatus();
-        if (!status.authenticated) {
-          input.placeholder = getModelSuggestionPlaceholder();
-          return;
-        }
-        const res = await fetch('/v1/models');
-        if (!res.ok) throw new Error('Failed to load model suggestions');
-        const data = await res.json();
-        input.placeholder = 'Target model';
-        optionList.innerHTML = (data.data || [])
-          .map(m => '<option value="' + escHtml(m.id) + '"></option>')
-          .join('');
-      } catch (e) {
-        input.placeholder = 'Target model (failed to load suggestions)';
-      }
-    }
-    document.getElementById('addMappingBtn').addEventListener('click', () => {
-      document.getElementById('mappingFormArea').style.display = 'block';
-      document.getElementById('mappingFrom').value = '';
-      loadModelOptions();
-      document.getElementById('mappingFrom').focus();
-    });
-    document.getElementById('cancelMappingBtn').addEventListener('click', () => {
-      document.getElementById('mappingFormArea').style.display = 'none';
-    });
-    document.getElementById('saveMappingBtn').addEventListener('click', async () => {
-      const from = document.getElementById('mappingFrom').value.trim();
-      const to = document.getElementById('mappingTo').value.trim();
-      if (!from || !to) { alert('Both fields are required'); return; }
-      try {
-        const res = await fetch(API_BASE + '/model-mappings/' + encodeURIComponent(from), {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ to })
-        });
-        if (res.ok) {
-          document.getElementById('mappingFormArea').style.display = 'none';
-          fetchMappings();
-        } else {
-          const d = await res.json();
-          alert(d.error?.message || 'Failed to save');
-        }
-      } catch (e) { alert('Failed to save mapping'); }
-    });
-  </script>
 </body>
 </html>`

@@ -5,6 +5,8 @@ import {
   GITHUB_CLIENT_ID,
   standardHeaders,
 } from "~/lib/api-config"
+import { resolveProxyDispatcher } from "~/lib/proxy"
+import { state } from "~/lib/state"
 
 /**
  * Single poll attempt for access token (non-blocking, for Web API use)
@@ -25,10 +27,16 @@ export async function pollAccessTokenOnce(
   }
   consola.debug("[pollAccessTokenOnce] Request body:", requestBody)
 
+  const dispatcher = resolveProxyDispatcher(
+    state.proxy,
+    process.env.PROXY_ENV === "true",
+  )
+
   const response = await fetch(`${GITHUB_BASE_URL}/login/oauth/access_token`, {
     method: "POST",
     headers: standardHeaders(),
     body: JSON.stringify(requestBody),
+    ...(dispatcher && { dispatcher }),
   })
 
   consola.debug("[pollAccessTokenOnce] Response status:", response.status)
